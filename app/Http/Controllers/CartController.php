@@ -2,97 +2,122 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\User;
+use App\Models\Product;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\View\View;
 
 class CartController extends Controller
 {
     /**
-     * Show the login form.
+     * Display the shopping cart.
      */
-    public function showLogin(): View
+    public function index(): View
     {
-        return view('auth.login');
-    }
+        $cart = session()->get('cart', []);
+        $cartItems = [];
+        $totalPrice = 0;
+        $totalWeight = 0;
 
-    /**
-     * Handle authentication attempt.
-     */
-    public function login(Request $request): RedirectResponse
-    {
-        $credentials = $request->validate([
-            'email' => ['required', 'email'],
-            'password' => ['required'],
-        ]);
+        if (!empty($cart)) {
+            $products = Product::whereIn('id', array_keys($cart))->get();
 
-        if (Auth::attempt($credentials, $request->boolean('remember'))) {
-            $request->session()->regenerate();
+            foreach ($products as $product) {
+                $quantity = $cart[$product->id];
+                // Limit quantity to stock
+                if ($quantity > $product->stock) {
+                    $quantity = $product->stock;
+                    $cart[$product->id] = $quantity;
+                }
 
-            /** @var User $user */
-            $user = Auth::user();
-            
-            if ($user->isAdmin()) {
-                return redirect()->intended(route('admin.orders'))->with('success', 'Selamat datang kembali, Admin!');
+                if ($quantity > 0) {
+                    $subtotal = $product->price * $quantity;
+                    $subweight = $product->weight * $quantity;
+                    
+                    $cartItems[] = [
+                        'product' => $product,
+                        'quantity' => $quantity,
+                        'subtotal' => $subtotal,
+                        'subweight' => $subweight,
+                    ];
+
+                    $totalPrice += $subtotal;
+                    $totalWeight += $subweight;
+                }
             }
-
-            return redirect()->intended(route('shop'))->with('success', 'Login berhasil! Selamat berbelanja.');
+            
+            session()->put('cart', $cart); // save possibly adjusted quantities
         }
 
-        return back()->withErrors([
-            'email' => 'Email atau password yang dimasukkan salah.',
-        ])->onlyInput('email');
+        return view('buyer.cart', compact('cartItems', 'totalPrice', 'totalWeight'));
     }
 
     /**
-     * Show the registration form.
+     * Add a product to the cart.
      */
-    public function showRegister(): View
+    public function add(Request $request, Product $product): RedirectResponse
     {
-        return view('auth.register');
-    }
+        $quantity = $request->input('quantity', 1);
 
-    /**
-     * Handle user registration.
-     */
-    public function register(Request $request): RedirectResponse
-    {
-        $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
-            'role' => ['required', 'in:buyer,admin'],
-        ]);
-
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-            'role' => $request->role,
-        ]);
-
-        Auth::login($user);
-
-        if ($user->isAdmin()) {
-            return redirect()->route('admin.orders')->with('success', 'Registrasi admin berhasil!');
+        if ($product->stock <= 0) {
+            return back()->with('error', 'Produk ini sedang habis.');
         }
 
-        return redirect()->route('shop')->with('success', 'Registrasi berhasil! Selamat datang.');
+        $cart = session()->get('cart', []);
+
+        // If product already exists in cart, increment quantity
+        if (isset($cart[$product->id])) {
+            $newQty = $cart[$product->id] + $quantity;
+            if ($newQty > $product->stock) {
+                return back()->with('error', 'Jumlah melebihi stok yang tersedia.');
+            }
+            $cart[$product->id] = $newQty;
+        } else {
+            if ($quantity > $product->stock) {
+                return back()->with('error', 'Jumlah melebihi stok yang tersedia.');
+            }
+            $cart[$product->id] = $quantity;
+        }
+
+        session()->put('cart', $cart);
+
+        return redirect()->route('cart.index')->with('success', 'Produk ditambahkan ke keranjang belanja.');
     }
 
     /**
-     * Log the user out of the application.
+     * Update quantity of a product in the cart.
      */
-    public function logout(Request $request): RedirectResponse
+    public function update(Request $request, Product $product): RedirectResponse
     {
-        Auth::logout();
+        $quantity = (int) $request->input('quantity', 1);
 
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
+        if ($quantity <= 0) {
+            return $this->remove($product);
+        }
 
-        return redirect()->route('shop')->with('success', 'Anda telah berhasil logout.');
+        if ($quantity > $product->stock) {
+            return back()->with('error', 'Jumlah melebihi stok yang tersedia.');
+        }
+
+        $cart = session()->get('cart', []);
+        $cart[$product->id] = $quantity;
+        session()->put('cart', $cart);
+
+        return back()->with('success', 'Jumlah produk berhasil diperbarui.');
+    }
+
+    /**
+     * Remove a product from the cart.
+     */
+    public function remove(Product $product): RedirectResponse
+    {
+        $cart = session()->get('cart', []);
+
+        if (isset($cart[$product->id])) {
+            unset($cart[$product->id]);
+            session()->put('cart', $cart);
+        }
+
+        return back()->with('success', 'Produk dihapus dari keranjang.');
     }
 }
