@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\View\View;
 
-class AuthController extends Controller
+class CartController extends Controller
 {
     /**
      * Show the login form.
