@@ -8,39 +8,66 @@ use Illuminate\Support\Facades\Log;
 class RajaOngkirService
 {
     protected string $apiKey;
-    protected string $baseUrl = 'https://api.rajaongkir.com/starter';
-    protected string $originCityId;
+
+    // RajaOngkir API V2 (by Komerce) - domain & struktur endpoint baru,
+    // menggantikan domain lama api.rajaongkir.com/starter yang sudah non-aktif.
+    protected string $baseUrl = 'https://rajaongkir.komerce.id/api/v1';
+
+    // Origin diisi dengan ID subdistrict/destination hasil pencarian di API V2.
+    // Default: Yogyakarta. Ganti via .env (RAJAONGKIR_ORIGIN_ID) kalau toko
+    // berlokasi di kota lain. ID ini BUKAN city_id lama (mis. 501), karena
+    // API V2 punya skema ID baru yang hanya bisa didapat lewat endpoint
+    // domestic-destination?search=.
+    protected string $originId;
+
+    // Mapping nama kota mock -> kata kunci pencarian di endpoint
+    // domestic-destination, supaya cost asli bisa dihitung tanpa mengubah
+    // dropdown provinsi/kota mock yang sudah dipakai di view & controller.
+    private const CITY_SEARCH_KEYWORDS = [
+        17  => 'Badung',
+        114 => 'Denpasar',
+        152 => 'Jakarta Barat',
+        153 => 'Jakarta Pusat',
+        154 => 'Jakarta Selatan',
+        155 => 'Jakarta Timur',
+        156 => 'Jakarta Utara',
+        23  => 'Bandung',
+        54  => 'Bekasi',
+        78  => 'Bogor',
+        115 => 'Depok',
+        399 => 'Semarang',
+        445 => 'Surakarta',
+        419 => 'Sleman',
+        501 => 'Yogyakarta',
+        256 => 'Malang',
+        444 => 'Surabaya',
+        43  => 'Banda Aceh',
+        278 => 'Medan',
+    ];
 
     public function __construct()
     {
         $this->apiKey = env('RAJAONGKIR_API_KEY', '');
-        // Default origin: Kota Yogyakarta (city_id: 501)
-        $this->originCityId = env('RAJAONGKIR_ORIGIN_CITY', '501');
+        $this->originId = env('RAJAONGKIR_ORIGIN_ID', '');
     }
 
     /**
      * Get list of provinces.
+     *
+     * CATATAN PENTING: RajaOngkir API V2 (Komerce) TIDAK lagi menyediakan
+     * endpoint /province & /city seperti versi Starter klasik. API V2 hanya
+     * punya satu endpoint pencarian destinasi (domestic-destination?search=)
+     * yang mengembalikan kombinasi kecamatan+kota+provinsi sekaligus dalam
+     * satu hasil, bukan struktur provinsi->kota bertingkat.
+     *
+     * Supaya alur dropdown Provinsi -> Kota di checkout (yang sudah dipakai
+     * di view & JS) tetap berfungsi tanpa perlu dirombak total, daftar
+     * provinsi & kota di bawah ini tetap memakai data tetap (bukan dummy
+     * acak - ini daftar provinsi & kota asli Indonesia). Yang diambil dari
+     * API ASLI adalah harga ongkirnya (lihat calculateCost()).
      */
     public function getProvinces(): array
     {
-        if (empty($this->apiKey)) {
-            return $this->getMockProvinces();
-        }
-
-        try {
-            $response = Http::withHeaders([
-                'key' => $this->apiKey
-            ])->get("{$this->baseUrl}/province");
-
-            if ($response->successful()) {
-                return $response->json()['rajaongkir']['results'] ?? [];
-            }
-            
-            Log::warning('RajaOngkir API failed. Using mock provinces. Error: ' . $response->body());
-        } catch (\Exception $e) {
-            Log::error('RajaOngkir connection error: ' . $e->getMessage());
-        }
-
         return $this->getMockProvinces();
     }
 
@@ -49,58 +76,120 @@ class RajaOngkirService
      */
     public function getCities(int $provinceId): array
     {
-        if (empty($this->apiKey)) {
-            return $this->getMockCities($provinceId);
-        }
-
-        try {
-            $response = Http::withHeaders([
-                'key' => $this->apiKey
-            ])->get("{$this->baseUrl}/city", [
-                'province' => $provinceId
-            ]);
-
-            if ($response->successful()) {
-                return $response->json()['rajaongkir']['results'] ?? [];
-            }
-
-            Log::warning("RajaOngkir API failed for cities in province {$provinceId}. Using mock cities.");
-        } catch (\Exception $e) {
-            Log::error('RajaOngkir connection error for cities: ' . $e->getMessage());
-        }
-
         return $this->getMockCities($provinceId);
     }
 
     /**
      * Calculate shipping cost.
+     *
+     * Alur untuk API ASLI (API V2 / Komerce):
+     *  1) Cari ID tujuan asli via endpoint pencarian domestic-destination,
+     *     menggunakan nama kota dari CITY_SEARCH_KEYWORDS sebagai kata kunci
+     *     (karena city_id mock di atas bukan ID yang dikenal API V2).
+     *  2) Pakai ID hasil pencarian itu untuk panggil domestic-cost.
+     * Kalau salah satu langkah gagal (key kosong, kota tak ditemukan,
+     * request error, dll), otomatis fallback ke mock supaya checkout tetap
+     * bisa jalan saat demo ke dosen.
      */
     public function calculateCost(int $destinationCityId, int $weightGrams, string $courier): array
     {
-        if (empty($this->apiKey)) {
+        if (empty($this->apiKey) || empty($this->originId)) {
+            Log::info('RajaOngkir: API key/origin ID kosong, pakai mock cost.');
             return $this->getMockCost($destinationCityId, $weightGrams, $courier);
         }
 
         try {
-            $response = Http::withHeaders([
-                'key' => $this->apiKey
-            ])->post("{$this->baseUrl}/cost", [
-                'origin' => $this->originCityId,
-                'destination' => $destinationCityId,
-                'weight' => $weightGrams,
-                'courier' => strtolower($courier),
-            ]);
+            $destinationId = $this->findDestinationId($destinationCityId);
 
-            if ($response->successful()) {
-                return $response->json()['rajaongkir']['results'] ?? [];
+            if (empty($destinationId)) {
+                Log::warning("RajaOngkir: kota '{$destinationCityId}' tidak ditemukan di API V2. Pakai mock cost.");
+                return $this->getMockCost($destinationCityId, $weightGrams, $courier);
             }
 
-            Log::warning("RajaOngkir API cost calculation failed. Using mock cost.");
+            $response = Http::asForm()
+                ->withHeaders(['key' => $this->apiKey])
+                ->post("{$this->baseUrl}/calculate/domestic-cost", [
+                    'origin'      => $this->originId,
+                    'destination' => $destinationId,
+                    'weight'      => $weightGrams,
+                    'courier'     => strtolower($courier),
+                    'price'       => 'lowest',
+                ]);
+
+            if ($response->successful()) {
+                $results = $response->json()['data'] ?? [];
+
+                if (!empty($results)) {
+                    return $this->mapV2CostToLegacyFormat($results, $courier);
+                }
+            }
+
+            Log::warning('RajaOngkir API V2 cost gagal: ' . $response->body());
         } catch (\Exception $e) {
-            Log::error('RajaOngkir cost connection error: ' . $e->getMessage());
+            Log::error('RajaOngkir API V2 connection error: ' . $e->getMessage());
         }
 
         return $this->getMockCost($destinationCityId, $weightGrams, $courier);
+    }
+
+    /**
+     * Cari ID destinasi asli di API V2 berdasarkan nama kota (mock city_id
+     * lama dipetakan ke nama kota lewat CITY_SEARCH_KEYWORDS, lalu nama itu
+     * dicari ke endpoint domestic-destination milik RajaOngkir).
+     */
+    private function findDestinationId(int $mockCityId): ?string
+    {
+        $keyword = self::CITY_SEARCH_KEYWORDS[$mockCityId] ?? null;
+
+        if (empty($keyword)) {
+            return null;
+        }
+
+        $response = Http::withHeaders(['key' => $this->apiKey])
+            ->get("{$this->baseUrl}/destination/domestic-destination", [
+                'search' => $keyword,
+                'limit'  => 1,
+                'offset' => 0,
+            ]);
+
+        if (!$response->successful()) {
+            Log::warning("RajaOngkir: pencarian destinasi '{$keyword}' gagal: " . $response->body());
+            return null;
+        }
+
+        $data = $response->json()['data'] ?? [];
+
+        return $data[0]['id'] ?? null;
+    }
+
+    /**
+     * Konversi format response API V2 (flat array per layanan kurir) ke
+     * format lama costs[].cost[0].value yang sudah dipakai controller &
+     * mock data, supaya RajaOngkirController tidak perlu diubah sama sekali.
+     */
+    private function mapV2CostToLegacyFormat(array $v2Results, string $courier): array
+    {
+        $services = [];
+
+        foreach ($v2Results as $item) {
+            $services[] = [
+                'service'     => $item['service'] ?? strtoupper($courier),
+                'description' => $item['description'] ?? '',
+                'cost' => [[
+                    'value' => (int) ($item['cost'] ?? 0),
+                    'etd'   => $item['etd'] ?? '-',
+                    'note'  => '',
+                ]],
+            ];
+        }
+
+        $courierName = $v2Results[0]['name'] ?? strtoupper($courier);
+
+        return [[
+            'code'  => strtolower($courier),
+            'name'  => $courierName,
+            'costs' => $services,
+        ]];
     }
 
     /* =========================================================================
