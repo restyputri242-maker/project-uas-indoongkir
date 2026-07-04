@@ -154,7 +154,7 @@
     <footer class="bg-white border-t border-slate-100 py-6 mt-12">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <p class="text-sm text-slate-500">
-                &copy; {{ date('Y') }} IndoOngkir. Dibuat untuk Project UAS Pemrograman Web.
+                &copy; {{ date('Y') }} IndoOngkir. Dibuat untuk Project UAS Pemrograman Web
             </p>
         </div>
     </footer>
