@@ -156,14 +156,6 @@
             <p class="text-sm text-slate-500">
                 &copy; {{ date('Y') }} IndoOngkir. Dibuat untuk Proyek Pemrograman Web.
             </p>
-            <div class="flex items-center gap-4 text-xs font-semibold text-slate-400">
-                <span>Mhs 1: Auth & CRUD Produk</span>
-                <span>•</span>
-                <span>Mhs 2: Keranjang & RajaOngkir API</span>
-                <span>•</span>
-                <span>Mhs 3: Transaksi & Invoice PDF</span>
-            </div>
-        </div>
     </footer>
 
     @yield('scripts')
