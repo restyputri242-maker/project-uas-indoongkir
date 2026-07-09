@@ -12,7 +12,7 @@
             </span>
             <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 leading-none">
                 Belanja Mudah, <br>
-                <span class="text-indigo-600">Ongkir Real-Time.</span>
+                <span class="text-indigo-600">Ongkir Real-Time 6.</span>
             </h1>
             <p class="text-slate-500 text-sm sm:text-base leading-relaxed">
                 Temukan produk lokal pilihan berkualitas terbaik dengan kalkulasi biaya pengiriman otomatis ke seluruh Indonesia menggunakan RajaOngkir.
